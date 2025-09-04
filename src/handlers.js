@@ -1,3 +1,4 @@
+import { askAI } from "./services/ai.js";
 import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js";
 import { getTokenByContract } from "./services/dexscreener.js";
 
