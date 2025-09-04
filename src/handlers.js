@@ -1,6 +1,6 @@
-import { askAI } from "./services/ai.js";
-import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js";
+import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
 import { getTokenByContract } from "./services/dexscreener.js";
+import { askAI } from "./services/ai.js";
 
 export function attachHandlers(bot) {
   // --- simple per-user cooldown (prevents spam/flood) ---
@@ -21,9 +21,9 @@ export function attachHandlers(bot) {
   bot.start((ctx) =>
     ctx.reply(
       [
-        "👋 Hey! I fetch live crypto prices.",
+        "👋 Hey! I fetch live crypto prices and can answer questions with AI.",
         "",
-        "🔹 Major coins (CoinGecko):",
+        "🔹 Major coins:",
         "   /price btc",
         "   /price eth",
         "",
@@ -31,9 +31,12 @@ export function attachHandlers(bot) {
         "   /token <contractAddress>",
         "   e.g. /token 0xdAC17F958D2ee523a2206206994597C13D831ec7",
         "",
+        "🤖 AI assistant:",
+        "   /ai <your question>",
+        "",
         "Tips:",
         "• Symbols are case-insensitive.",
-        "• I’ll pick the most liquid pair on Dexscreener automatically."
+        "• I pick the most liquid pair on Dexscreener automatically."
       ].join("\n")
     )
   );
@@ -41,18 +44,18 @@ export function attachHandlers(bot) {
   // --- /price <symbolOrId> ---
   bot.command("price", async (ctx) => {
     const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
-    if (!q) return ctx.reply("Usage: /price <symbol or id>\nExample: /price btc");
+    if (!q) return ctx.reply("Usage: /price <symbol or name>\nExample: /price btc");
 
     try {
-      const id = await resolveCoinId(q);
+      const id = await resolveCoinId(q); // e.g., "btc-bitcoin" for CoinPaprika backend
       const { price, change24h } = await getCoinPriceUSD(id);
 
-      const ch = change24h ? change24h.toFixed(2) : "0.00";
-      const arrow = change24h >= 0 ? "🟢" : "🔴";
+      const ch = change24h != null ? change24h.toFixed(2) : "0.00";
+      const arrow = (change24h ?? 0) >= 0 ? "🟢" : "🔴";
 
       await ctx.reply(
         [
-          `💰 ${id} price`,
+          `💰 ${q.toUpperCase()} price`,
           `USD: $${Number(price).toLocaleString(undefined, { maximumFractionDigits: 10 })}`,
           `${arrow} 24h: ${ch}%`
         ].join("\n")
@@ -98,6 +101,25 @@ export function attachHandlers(bot) {
     }
   });
 
+  // --- /ai <question> ---
+  bot.command("ai", async (ctx) => {
+    const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
+    if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
+
+    try {
+      const answer = await askAI(q);
+      await ctx.reply(answer, { disable_web_page_preview: true });
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) {
+        return ctx.reply("⏳ AI is rate-limited. Try again shortly.");
+      }
+      await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
+    }
+  });
+
   // --- /help ---
-  bot.hears(/^\/help/i, (ctx) => ctx.reply("Use /price <symbol> or /token <contractAddress>."));
+  bot.hears(/^\/help/i, (ctx) =>
+    ctx.reply("Use /price <symbol>, /token <contractAddress>, or /ai <question>.")
+  );
 }
