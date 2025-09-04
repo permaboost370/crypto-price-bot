@@ -1,19 +1,33 @@
-// src/services/ai.js — Groq AI client (with persona style support)
+// src/services/ai.js — Groq AI client with style + HARD word cap
 import axios from "axios";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const KEY = process.env.GROQ_API_KEY;
 const MODEL = (process.env.AI_MODEL || "llama-3.1-8b-instant").trim();
-const STYLE = process.env.AI_STYLE?.trim() || 
-  "You are a concise, helpful assistant. If asked about crypto, be practical and avoid hype.";
+const STYLE = process.env.AI_STYLE?.trim() ||
+  "You are a concise, helpful assistant. Keep answers short and practical.";
+const MAX_WORDS = Math.max(1, Number(process.env.AI_MAX_WORDS || 20)); // hard cap
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function trimToWords(text, limit) {
+  const words = String(text || "").trim().split(/\s+/);
+  if (words.length <= limit) return words.join(" ");
+  return words.slice(0, limit).join(" ");
+}
 
 function buildMessages(userText) {
   const content = String(userText || "").trim();
   if (!content) throw new Error("Prompt is empty. Use /ai <your question>.");
+
+  // Add explicit brevity rule to the system message
+  const system = [
+    STYLE,
+    `RULES: Use at most ${MAX_WORDS} words. No lists unless the user asks.`
+  ].join(" ");
+
   return [
-    { role: "system", content: STYLE },
+    { role: "system", content: system },
     { role: "user", content: content.slice(0, 4000) }
   ];
 }
@@ -59,13 +73,14 @@ export async function askAI(userText) {
 
   const payload = {
     model: MODEL,
-    temperature: 0.9, // make it more creative & theatrical
-    max_tokens: 700,
+    temperature: 0.7,          // still stylish, but less rambly
+    max_tokens: 120,           // conservative to avoid overflow
     messages
   };
 
   const data = await postWithRetry(payload);
-  const text = data?.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("Empty AI response.");
-  return text;
+  const raw = data?.choices?.[0]?.message?.content ?? "";
+  const clipped = trimToWords(raw, MAX_WORDS); // HARD post-process cap
+  if (!clipped.trim()) throw new Error("Empty AI response.");
+  return clipped;
 }
