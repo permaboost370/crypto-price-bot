@@ -1,6 +1,5 @@
 import axios from "axios";
 
-// ---------- tiny helpers ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function getWithRetry(url, { params = {}, timeout = 10000 } = {}, maxRetries = 3) {
@@ -10,10 +9,7 @@ async function getWithRetry(url, { params = {}, timeout = 10000 } = {}, maxRetri
       return await axios.get(url, {
         params,
         timeout,
-        headers: {
-          // Some APIs rate-limit anonymous clients that don't set UA
-          "User-Agent": "crypto-price-bot/1.0 (+render)"
-        }
+        headers: { "User-Agent": "crypto-price-bot/1.0 (+render)" }
       });
     } catch (err) {
       lastErr = err;
@@ -21,7 +17,6 @@ async function getWithRetry(url, { params = {}, timeout = 10000 } = {}, maxRetri
       const isTimeout = err?.code === "ECONNABORTED";
       const retryable = status === 429 || status >= 500 || isTimeout;
       if (!retryable || attempt === maxRetries) break;
-      // exponential backoff: 500ms, 1000ms, 2000ms, 4000ms...
       const wait = 500 * Math.pow(2, attempt);
       await sleep(wait);
     }
@@ -35,7 +30,6 @@ const priceCache = new Map();
 /** Cache for the giant coins list to speed up symbol->id resolve */
 let coinsListCache = { ts: 0, data: null };
 
-// ---------- public API ----------
 export async function resolveCoinId(symbolOrId) {
   const q = symbolOrId.trim().toLowerCase();
 
@@ -43,13 +37,11 @@ export async function resolveCoinId(symbolOrId) {
   try {
     await getWithRetry(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(q)}`);
     return q;
-  } catch (_) {
-    // continue
-  }
+  } catch (_) {}
 
-  // Refresh coins list cache every 10 minutes
+  // Refresh coins list cache every 30 minutes
   const now = Date.now();
-  if (!coinsListCache.data || now - coinsListCache.ts > 10 * 60 * 1000) {
+  if (!coinsListCache.data || now - coinsListCache.ts > 30 * 60 * 1000) {
     const { data } = await getWithRetry(
       "https://api.coingecko.com/api/v3/coins/list",
       { params: { include_platform: "true" }, timeout: 15000 }
@@ -66,11 +58,12 @@ export async function resolveCoinId(symbolOrId) {
 }
 
 export async function getCoinPriceUSD(coinId) {
-  // short TTL cache to reduce API hits & 429
-  const TTL_MS = 15 * 1000; // 15s
+  const TTL_MS = 60 * 1000; // cache 1 minute
   const now = Date.now();
   const cached = priceCache.get(coinId);
-  if (cached && now - cached.ts < TTL_MS) return { price: cached.price, change24h: cached.change24h };
+  if (cached && now - cached.ts < TTL_MS) {
+    return { price: cached.price, change24h: cached.change24h };
+  }
 
   const { data } = await getWithRetry("https://api.coingecko.com/api/v3/simple/price", {
     params: {
