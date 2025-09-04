@@ -2,8 +2,7 @@ import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js";
 import { getTokenByContract } from "./services/dexscreener.js";
 
 export function attachHandlers(bot) {
-  // --- Step 3: simple per-user cooldown (prevents spam/flood) ---
-  // Drops messages if the same user sends commands faster than 500ms
+  // --- simple per-user cooldown (prevents spam/flood) ---
   const lastCall = new Map();
   bot.use((ctx, next) => {
     const uid = ctx.from?.id;
