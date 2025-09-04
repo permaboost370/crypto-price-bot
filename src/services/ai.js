@@ -1,26 +1,20 @@
-// src/services/ai.js — Groq AI client (OpenAI-compatible) with better errors & safe defaults
+// src/services/ai.js — Groq AI client (with persona style support)
 import axios from "axios";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const KEY = process.env.GROQ_API_KEY;
 const MODEL = (process.env.AI_MODEL || "llama-3.1-8b-instant").trim();
+const STYLE = process.env.AI_STYLE?.trim() || 
+  "You are a concise, helpful assistant. If asked about crypto, be practical and avoid hype.";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function buildMessages(userText) {
   const content = String(userText || "").trim();
-  if (!content) {
-    throw new Error("Prompt is empty. Use /ai <your question>.");
-  }
-  // keep payload small to avoid context errors
-  const clipped = content.slice(0, 4000);
+  if (!content) throw new Error("Prompt is empty. Use /ai <your question>.");
   return [
-    {
-      role: "system",
-      content:
-        "You are a concise, helpful assistant. If asked about crypto, be practical and avoid hype. Use short paragraphs or bullet points. Keep answers under 300 words unless code is requested."
-    },
-    { role: "user", content: clipped }
+    { role: "system", content: STYLE },
+    { role: "user", content: content.slice(0, 4000) }
   ];
 }
 
@@ -42,9 +36,7 @@ async function postWithRetry(body, maxRetries = 2) {
       const status = err?.response?.status;
       const isTimeout = err?.code === "ECONNABORTED";
       const retryable = status === 429 || status >= 500 || isTimeout;
-      // If it's a 400/401/403, no point retrying — surface the message immediately
       if (!retryable || attempt === maxRetries) {
-        // Enhance the error with Groq's message (if any)
         const detail =
           err?.response?.data?.error?.message ||
           err?.response?.data?.message ||
@@ -54,7 +46,7 @@ async function postWithRetry(body, maxRetries = 2) {
         e.status = status;
         throw e;
       }
-      await sleep(500 * Math.pow(2, attempt)); // 0.5s, 1s...
+      await sleep(500 * Math.pow(2, attempt));
     }
   }
   throw lastErr;
@@ -65,10 +57,9 @@ export async function askAI(userText) {
 
   const messages = buildMessages(userText);
 
-  // Build a conservative payload. If you changed MODEL to an invalid name, Groq will 400.
   const payload = {
     model: MODEL,
-    temperature: 0.3,
+    temperature: 0.9, // make it more creative & theatrical
     max_tokens: 700,
     messages
   };
