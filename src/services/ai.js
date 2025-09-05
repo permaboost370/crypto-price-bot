@@ -1,8 +1,8 @@
 // src/services/ai.js
 // DMAN persona with live WEB SEARCH grounding (sports/news/etc.), plus coins/tokens if present.
-// Few-shots, short per-user history, and a word-limit rule (no hard trim).
+// Few-shots, short per-user history, and a word-limit rule (model self-limits; no hard trim).
 import axios from "axios";
-import { resolveCoinId, getCoinPriceUSD } from "./coingecko.js";     // CoinPaprika-backed
+import { resolveCoinId, getCoinPriceUSD } from "./coingecko.js";     // CoinPaprika-backed in your setup
 import { getTokenByContract } from "./dexscreener.js";
 import { webSearch } from "./websearch.js";
 
@@ -20,7 +20,10 @@ function parseFewshots() {
     if (!Array.isArray(arr)) return [];
     return arr
       .filter((x) => x && typeof x.user === "string" && typeof x.assistant === "string")
-      .map((x) => [{ role: "user", content: x.user }, { role: "assistant", content: x.assistant }])
+      .map((x) => [
+        { role: "user", content: x.user },
+        { role: "assistant", content: x.assistant }
+      ])
       .flat();
   } catch {
     return [];
@@ -28,6 +31,7 @@ function parseFewshots() {
 }
 const FEWSHOTS = parseFewshots();
 
+// ---------- HELPERS ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Heuristic: does the prompt likely require fresh web info? */
@@ -44,11 +48,14 @@ function needsWeb(q) {
 // naive symbol/contract extraction (fast & safe)
 function extractCandidates(text) {
   const t = String(text || "");
+
+  // EVM-like (0x...) and common base58 lengths (Solana, etc.)
   const contracts = Array.from(
     t.matchAll(/\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/g)
   ).map((m) => m[0]);
 
-  const roughWords = t.toLowerCase().match(/\b[a-z0-9.+-]{2,10}\b/gi) || [];
+  // potential tickers
+  const roughWords = t.match(/\b[a-z0-9.+-]{2,10}\b/gi) || [];
   const blacklist = new Set([
     "the","and","you","are","with","this","that","about","price","token","coin","dman","dao","man",
     "buy","sell","up","down","today","yesterday","latest","news","result","score","won","who","when",
@@ -60,9 +67,13 @@ function extractCandidates(text) {
       .filter((w) => !blacklist.has(w.toLowerCase()))
   )).slice(0, 5);
 
-  return { contracts: Array.from(new Set(contracts)).slice(0, 2), symbols: candidates.slice(0, 5) };
+  return {
+    contracts: Array.from(new Set(contracts)).slice(0, 2),
+    symbols: candidates.slice(0, 5)
+  };
 }
 
+// Global market snapshot (CoinPaprika)
 async function fetchGlobal() {
   try {
     const { data } = await axios.get("https://api.coinpaprika.com/v1/global", {
@@ -90,11 +101,12 @@ function fmtUSD(n) {
   return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+// Build FACTS block for grounding (web + crypto + global)
 async function buildFacts(userText) {
   const facts = [];
   const ts = new Date().toISOString();
 
-  // 1) Web search if needed
+  // 1) Web search if likely needed
   if (needsWeb(userText)) {
     try {
       const results = await webSearch(userText);
@@ -104,10 +116,12 @@ async function buildFacts(userText) {
           facts.push(`• ${r.title} — ${r.snippet} (${r.url})`);
         }
       }
-    } catch { /* ignore */ }
+    } catch {
+      // ignore web failures
+    }
   }
 
-  // 2) Coins/tokens if user mentioned them (kept from previous logic)
+  // 2) Coins/tokens if mentioned
   const { symbols, contracts } = extractCandidates(userText);
   const seenCoins = new Set();
 
@@ -119,7 +133,9 @@ async function buildFacts(userText) {
       const arrow = (change24h ?? 0) >= 0 ? "🟢" : "🔴";
       facts.push(`COIN ${raw.toUpperCase()}: $${fmtUSD(price)} (${arrow} ${change24h?.toFixed?.(2) ?? "0.00"}% 24h)`);
       seenCoins.add(id);
-    } catch { /* ignore */ }
+    } catch {
+      // ignore unknown symbols
+    }
   }
 
   for (const ca of contracts) {
@@ -127,12 +143,17 @@ async function buildFacts(userText) {
       const t = await getTokenByContract(ca);
       const pc = t.priceChange?.h24 != null ? `${t.priceChange.h24.toFixed(2)}%` : "n/a";
       facts.push(`TOKEN ${t.symbol || "?"} (${t.chainId} • ${t.dex}): $${fmtUSD(t.priceUsd)} (24h ${pc})`);
-    } catch { /* ignore */ }
+    } catch {
+      // ignore
+    }
   }
 
+  // 3) Global snapshot
   const g = await fetchGlobal();
   if (g) {
-    facts.push(`GLOBAL: MCAP ~$${fmtUSD(g.marketCapUSD)}, VOL24h ~$${fmtUSD(g.volume24hUSD)}, BTC.D ${g.btcDominancePct?.toFixed?.(2) ?? "n/a"}%`);
+    facts.push(
+      `GLOBAL: MCAP ~$${fmtUSD(g.marketCapUSD)}, VOL24h ~$${fmtUSD(g.volume24hUSD)}, BTC.D ${g.btcDominancePct?.toFixed?.(2) ?? "n/a"}%`
+    );
   }
 
   if (!facts.length) return "";
@@ -198,10 +219,17 @@ async function postWithRetry(body, maxRetries = 2) {
   throw lastErr;
 }
 
+/**
+ * askAI(userText, history?)
+ * - Auto-fetches live web data (when needed), + coins/tokens/global, and injects as FACTS.
+ * - Enforces "stay under N words & finish sentences" via system rules.
+ */
 export async function askAI(userText, history = []) {
   if (!KEY) throw new Error("Missing GROQ_API_KEY");
 
-  const factsText = await buildFacts(userText); // includes WEB RESULTS when needed
+  // Build live FACTS (best effort)
+  const factsText = await buildFacts(userText);
+
   const messages = buildMessages(userText, history, factsText);
   const payload = {
     model: MODEL,
