@@ -76,7 +76,7 @@ export async function webSearch(query) {
   } catch (e) {
     // fallback chain
     try {
-      if (TAVILY_API_KEY && SERPER_API_KEY) return await tavilySearch(query);
+      if (TAVILY_API_KEY && !SERPER_API_KEY) return await tavilySearch(query);
       if (BRAVE_API_KEY) return await braveSearch(query);
       return await ddgSearch(query);
     } catch {
