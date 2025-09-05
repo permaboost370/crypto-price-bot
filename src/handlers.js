@@ -104,21 +104,22 @@ export function attachHandlers(bot) {
   });
 
   // --- /ai <question> ---
-  bot.command("ai", async (ctx) => {
-    const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
-    if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
+bot.command("ai", async (ctx) => {
+  const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
+  if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
 
-    try {
-      const answer = await askAI(q);
-      await ctx.reply(answer, { disable_web_page_preview: true });
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 429) {
-        return ctx.reply("⏳ AI is rate-limited. Try again shortly.");
-      }
-      await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
+  try {
+    const answer = await askAI(q);
+    await ctx.reply(answer, { disable_web_page_preview: true });
+  } catch (err) {
+    const status = err?.response?.status;
+    if (status === 429) {
+      return ctx.reply("⏳ AI is rate-limited. Try again shortly.");
     }
-  });
+    await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
+  }
+});
+
 
   // --- /help ---
   bot.hears(/^\/help/i, (ctx) =>
