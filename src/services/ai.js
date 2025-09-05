@@ -5,7 +5,6 @@
 import axios from "axios";
 import { resolveCoinId, getCoinPriceUSD } from "./coingecko.js";     // CoinPaprika-backed in your setup
 import { getTokenByContract } from "./dexscreener.js";
-import { webSearch } from "./websearch.js";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const KEY = process.env.GROQ_API_KEY;
@@ -44,13 +43,11 @@ function hasAny(haystack, needles) {
 function needsWeb(q) {
   const s = String(q || "").toLowerCase();
 
-  // general recency
   const temporal = [
     "today","yesterday","last night","this morning","this afternoon","latest","breaking",
     "update","updated","just now","recent","right now","this week","this month","tonight","live"
   ];
 
-  // sports & competitions
   const sportsKeywords = [
     "roster","lineup","squad","starting","starters","depth chart","trade","injury",
     "score","result","results","fixture","fixtures","schedule","game","match","season",
@@ -61,54 +58,43 @@ function needsWeb(q) {
     "euros","ncaa","serie a","bundesliga","ligue 1","f1","formula 1","motogp"
   ];
   const sportsTeams = [
-    // NBA examples
     "lakers","los angeles lakers","lal","warriors","golden state warriors","gsw",
     "celtics","boston celtics","bos","mavericks","dallas mavericks","dal",
-    // EuroLeague examples
     "real madrid","barcelona","olympiacos","panathinaikos","fenerbahce","anadolu efes","maccabi",
-    // Football clubs (common)
-    "man city","manchester city","arsenal","liverpool","real madrid","barcelona","bayern","psg","juventus","inter","milan"
+    "man city","manchester city","arsenal","liverpool","bayern","psg","juventus","inter","milan"
   ];
 
-  // finance & stocks (non-crypto)
   const finance = [
     "stock","stocks","share","shares","dividend","earnings","eps","guidance","nasdaq","dow","s&p 500",
     "pre-market","premarket","after-hours","ticker","sec filing","10-k","10q","ipo","halt","resume trading"
   ];
 
-  // tech/software/security
   const tech = [
     "latest version","release notes","changelog","patch notes","security advisory","cve","vulnerability",
     "outage","status page","incident","service disruption","downtime"
   ];
 
-  // weather & hazards & disruptions
   const weatherHazards = [
     "weather","forecast","temperature","rain","snow","storm","hurricane","typhoon","tornado",
     "earthquake","wildfire","flood","heatwave","air quality","aqi","tsunami"
   ];
 
-  // travel/transport/live ops
   const transport = [
     "flight","flight status","delayed","delay","canceled","train","subway","metro","traffic","road closure","ferry","airport"
   ];
 
-  // politics/elections
   const politics = [
     "election","vote","polls","results","ballot","referendum","candidate","debate","coalition","turnout"
   ];
 
-  // entertainment & releases
   const entertainment = [
     "box office","premiere","release date","episode","season","cast change","trailer","leak","soundtrack","setlist","tour dates"
   ];
 
-  // shopping/availability/deals
   const shopping = [
     "in stock","restock","availability","preorder","price drop","deal","discount","coupon"
   ];
 
-  // if a year or a specific date is mentioned, treat as potentially fresh (e.g., “2025 lakers roster”)
   const hasYear = /\b(19|20)\d{2}\b/.test(s);
   const hasDate =
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?\b/.test(s) ||
@@ -127,46 +113,48 @@ function needsWeb(q) {
 /** Expand common abbreviations to improve web search recall. */
 function expandSearchQuery(q) {
   let s = String(q || "");
-
-  // Sports team abbreviations
-  s = s.replace(/\bLAL\b/gi, "Los Angeles Lakers");
-  s = s.replace(/\bGSW\b/gi, "Golden State Warriors");
-  s = s.replace(/\bBOS\b/gi, "Boston Celtics");
-  s = s.replace(/\bDAL\b/gi, "Dallas Mavericks");
-  s = s.replace(/\bUCL\b/gi, "UEFA Champions League");
-  s = s.replace(/\bEPL\b/gi, "English Premier League");
-
-  // Finance shorthand
-  s = s.replace(/\bS&P\b/gi, "S&P 500");
-  s = s.replace(/\bDJIA\b/gi, "Dow Jones Industrial Average");
-
+  s = s.replace(/\bLAL\b/gi, "Los Angeles Lakers")
+       .replace(/\bGSW\b/gi, "Golden State Warriors")
+       .replace(/\bBOS\b/gi, "Boston Celtics")
+       .replace(/\bDAL\b/gi, "Dallas Mavericks")
+       .replace(/\bUCL\b/gi, "UEFA Champions League")
+       .replace(/\bEPL\b/gi, "English Premier League")
+       .replace(/\bS&P\b/gi, "S&P 500")
+       .replace(/\bDJIA\b/gi, "Dow Jones Industrial Average");
   return s;
 }
 
-// naive symbol/contract extraction (fast & safe)
+// ---- LAZY import of websearch (prevents boot crash if file missing/typo) ----
+let webSearchFn = null;
+async function getWebSearch() {
+  if (webSearchFn) return webSearchFn;
+  try {
+    const mod = await import("./websearch.js");
+    webSearchFn = mod?.webSearch;
+    if (!webSearchFn) throw new Error("webSearch export missing");
+  } catch (e) {
+    console.error("⚠️ websearch module failed to load:", e?.message || e);
+    webSearchFn = null;
+  }
+  return webSearchFn;
+}
+
+// naive symbol/contract extraction
 function extractCandidates(text) {
   const t = String(text || "");
-
-  // EVM-like (0x...) + common base58 lengths (Solana, etc.)
   const contracts = Array.from(
     t.matchAll(/\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/g)
   ).map((m) => m[0]);
 
-  // potential tickers/words (we'll filter common noise)
   const roughWords = t.match(/\b[a-z0-9.+-]{2,10}\b/gi) || [];
   const blacklist = new Set([
-    // generic stopwords
     "the","and","you","are","with","this","that","about","is","it","to","for","of","in","on","at",
     "how","what","why","where","when","should","will","can","do","does","did","be","am","was","were",
-    // crypto-vs-other noise
     "price","token","coin","dman","dao","man",
-    // sports abbreviations (avoid misclassifying as tickers)
     "lal","gsw","bos","dal","nba","ucl","epl","f1"
   ]);
   const candidates = Array.from(new Set(
-    roughWords
-      .map((w) => w.replace(/\.+$/,""))
-      .filter((w) => !blacklist.has(w.toLowerCase()))
+    roughWords.map((w) => w.replace(/\.+$/,"")).filter((w) => !blacklist.has(w.toLowerCase()))
   )).slice(0, 5);
 
   return {
@@ -190,9 +178,7 @@ async function fetchGlobal() {
       volume24hUSD: typeof vol === "number" ? vol : null,
       btcDominancePct: typeof btcDom === "number" ? btcDom : null
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function fmtUSD(n) {
@@ -203,7 +189,7 @@ function fmtUSD(n) {
   return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-// Build FACTS block for grounding (web + crypto + global)
+// Build FACTS block (web + crypto + global)
 async function buildFacts(userText) {
   const facts = [];
   const ts = new Date().toISOString();
@@ -211,20 +197,26 @@ async function buildFacts(userText) {
   // 1) Web search if likely needed
   if (needsWeb(userText)) {
     try {
-      const query = expandSearchQuery(userText);
-      const results = await webSearch(query);
-      if (results.length) {
-        facts.push("WEB RESULTS:");
-        for (const r of results.slice(0, 5)) {
-          facts.push(`• ${r.title} — ${r.snippet} (${r.url})`);
+      const ws = await getWebSearch();
+      if (ws) {
+        const query = expandSearchQuery(userText);
+        const results = await ws(query);
+        if (results.length) {
+          facts.push("WEB RESULTS:");
+          for (const r of results.slice(0, 5)) {
+            facts.push(`• ${r.title} — ${r.snippet} (${r.url})`);
+          }
         }
+      } else {
+        facts.push("WEB RESULTS: (unavailable)");
       }
-    } catch {
-      // ignore web failures
+    } catch (e) {
+      console.error("web search failed:", e?.message || e);
+      facts.push("WEB RESULTS: (error)");
     }
   }
 
-  // 2) Coins/tokens if mentioned (kept from your previous logic)
+  // 2) Coins/tokens if mentioned
   const { symbols, contracts } = extractCandidates(userText);
   const seenCoins = new Set();
 
@@ -236,9 +228,7 @@ async function buildFacts(userText) {
       const arrow = (change24h ?? 0) >= 0 ? "🟢" : "🔴";
       facts.push(`COIN ${raw.toUpperCase()}: $${fmtUSD(price)} (${arrow} ${change24h?.toFixed?.(2) ?? "0.00"}% 24h)`);
       seenCoins.add(id);
-    } catch {
-      // ignore unknown symbols
-    }
+    } catch { /* ignore */ }
   }
 
   for (const ca of contracts) {
@@ -246,17 +236,13 @@ async function buildFacts(userText) {
       const t = await getTokenByContract(ca);
       const pc = t.priceChange?.h24 != null ? `${t.priceChange.h24.toFixed(2)}%` : "n/a";
       facts.push(`TOKEN ${t.symbol || "?"} (${t.chainId} • ${t.dex}): $${fmtUSD(t.priceUsd)} (24h ${pc})`);
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
 
-  // 3) Global snapshot (always useful context)
+  // 3) Global snapshot
   const g = await fetchGlobal();
   if (g) {
-    facts.push(
-      `GLOBAL: MCAP ~$${fmtUSD(g.marketCapUSD)}, VOL24h ~$${fmtUSD(g.volume24hUSD)}, BTC.D ${g.btcDominancePct?.toFixed?.(2) ?? "n/a"}%`
-    );
+    facts.push(`GLOBAL: MCAP ~$${fmtUSD(g.marketCapUSD)}, VOL24h ~$${fmtUSD(g.volume24hUSD)}, BTC.D ${g.btcDominancePct?.toFixed?.(2) ?? "n/a"}%`);
   }
 
   if (!facts.length) return "";
@@ -271,7 +257,7 @@ function buildMessages(userText, history = [], factsText = "") {
     `RULES: Keep answers under ${MAX_WORDS} words.`,
     `Always finish your sentences.`,
     `When FACTS are provided, ground your answer strictly on them; cite no numbers beyond FACTS.`,
-    `If data is missing, say you don't know and suggest refining the question or running another web check.`,
+    `If data is missing, say you don't know and suggest refining the question or another web check.`,
     `Punchy, cinematic, fearless DMAN tone.`
   ].join(" ");
 
@@ -307,11 +293,7 @@ async function postWithRetry(body, maxRetries = 2) {
       const isTimeout = err?.code === "ECONNABORTED";
       const retryable = status === 429 || status >= 500 || isTimeout;
       if (!retryable || attempt === maxRetries) {
-        const detail =
-          err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          err?.message ||
-          "AI error.";
+        const detail = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || "AI error.";
         const e = new Error(detail);
         e.status = status;
         throw e;
@@ -329,16 +311,9 @@ async function postWithRetry(body, maxRetries = 2) {
  */
 export async function askAI(userText, history = []) {
   if (!KEY) throw new Error("Missing GROQ_API_KEY");
-
-  const factsText = await buildFacts(userText); // includes WEB RESULTS when needed
+  const factsText = await buildFacts(userText);
   const messages = buildMessages(userText, history, factsText);
-  const payload = {
-    model: MODEL,
-    temperature: 0.7,
-    max_tokens: 240,
-    messages
-  };
-
+  const payload = { model: MODEL, temperature: 0.7, max_tokens: 240, messages };
   const data = await postWithRetry(payload);
   const raw = data?.choices?.[0]?.message?.content ?? "";
   if (!raw.trim()) throw new Error("Empty AI response.");
