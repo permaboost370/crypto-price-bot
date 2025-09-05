@@ -110,7 +110,28 @@ bot.command("ai", async (ctx) => {
 
   try {
     const answer = await askAI(q);
+
+    // 1) Text reply (existing behavior)
     await ctx.reply(answer, { disable_web_page_preview: true });
+
+    // 2) Voice reply (MP3 via node-gtts)
+    try {
+      const mp3 = await synthesizeToMp3(
+        answer
+          .replace(/https?:\/\/\S+/g, "")       // optional cleanup for TTS
+          .replace(/```[\s\S]*?```/g, "")
+          .trim(),
+        process.env.VOICE_LANG || "en"
+      );
+
+      await ctx.replyWithAudio(
+        { source: mp3, filename: "reply.mp3" },
+        { title: "AI reply" }
+      );
+    } catch (ttsErr) {
+      console.error("TTS failed:", ttsErr?.message || ttsErr);
+      // Silent fail: keep the text message only
+    }
   } catch (err) {
     const status = err?.response?.status;
     if (status === 429) {
@@ -119,6 +140,7 @@ bot.command("ai", async (ctx) => {
     await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
   }
 });
+
 
 
   // --- /help ---
