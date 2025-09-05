@@ -1,6 +1,8 @@
 import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
 import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
+import { synthesizeToMp3 } from "./services/tts.js";   // <-- ADD THIS
+
 
 export function attachHandlers(bot) {
   // --- simple per-user cooldown (prevents spam/flood) ---
