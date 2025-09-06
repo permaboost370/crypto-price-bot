@@ -1,7 +1,7 @@
 import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
 import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
-import { synthesizeToMp3 } from "./services/tts.js";
+import { synthesizeToMp3 } from "./services/tts.js"; // <-- ElevenLabs TTS
 
 export function attachHandlers(bot) {
   // --- simple per-user cooldown (prevents spam/flood) ---
@@ -109,7 +109,28 @@ export function attachHandlers(bot) {
 
     try {
       const answer = await askAI(q);
+
+      // 1) Text reply
       await ctx.reply(answer, { disable_web_page_preview: true });
+
+      // 2) Voice reply (via ElevenLabs)
+      try {
+        const mp3 = await synthesizeToMp3(
+          answer
+            .replace(/https?:\/\/\S+/g, "")       // optional cleanup for TTS
+            .replace(/```[\s\S]*?```/g, "")
+            .trim()
+        );
+
+        await ctx.replyWithAudio(
+          { source: mp3, filename: "reply.mp3" },
+          { title: "AI reply" }
+        );
+      } catch (ttsErr) {
+        console.error("TTS failed:", ttsErr?.message || ttsErr);
+        // To surface error in chat while testing, uncomment:
+        // await ctx.reply(`🔇 TTS error: ${ttsErr?.message || "unknown"}`);
+      }
     } catch (err) {
       const status = err?.response?.status;
       if (status === 429) {
@@ -117,6 +138,43 @@ export function attachHandlers(bot) {
       }
       await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
     }
+  });
+
+  // --- /say <text> (TTS smoke test) ---
+  bot.command("say", async (ctx) => {
+    const text = ctx.message.text.split(" ").slice(1).join(" ").trim();
+    if (!text) return ctx.reply("Usage: /say <text>");
+
+    try {
+      const mp3 = await synthesizeToMp3(
+        text
+          .replace(/https?:\/\/\S+/g, "")
+          .replace(/```[\s\S]*?```/g, "")
+          .trim()
+      );
+
+      await ctx.replyWithAudio(
+        { source: mp3, filename: "say.mp3" },
+        { title: "TTS test" }
+      );
+    } catch (err) {
+      console.error("TTS /say failed:", err?.message || err);
+      await ctx.reply(`🔇 TTS error: ${err?.message || "unknown"}`);
+    }
+  });
+
+  // --- /diag (check critical env) ---
+  bot.command("diag", (ctx) => {
+    const mask = (s, show = 4) => (s ? s.slice(0, show) + "…" : "(unset)");
+    const lines = [
+      `BASE_URL: ${process.env.BASE_URL || "(unset)"}`,
+      `TELEGRAM_BOT_TOKEN: ${mask(process.env.TELEGRAM_BOT_TOKEN)}`,
+      `GROQ_API_KEY: ${mask(process.env.GROQ_API_KEY)}`,
+      `ELEVENLABS_API_KEY: ${mask(process.env.ELEVENLABS_API_KEY)}`,
+      `ELEVEN_VOICE_ID: ${process.env.ELEVEN_VOICE_ID || "(unset)"}`,
+      `ELEVEN_MODEL_ID: ${process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2"}`
+    ];
+    return ctx.reply(lines.join("\n"));
   });
 
   // --- /help ---
