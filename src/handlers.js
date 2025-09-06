@@ -1,25 +1,23 @@
 import axios from "axios";
-import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
+import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js";
 import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
-import { synthesizeToMp3 } from "./services/tts.js"; // ElevenLabs TTS (SDK or axios behind the scenes)
+import { synthesizeToMp3 } from "./services/tts.js";
 
 export function attachHandlers(bot) {
-  // --- simple per-user cooldown (prevents spam/flood) ---
+  // --- per-user cooldown ---
   const lastCall = new Map();
   bot.use((ctx, next) => {
     const uid = ctx.from?.id;
     if (!uid) return next();
     const now = Date.now();
     const prev = lastCall.get(uid) || 0;
-    if (now - prev < 500) {
-      return; // silently drop if too fast
-    }
+    if (now - prev < 500) return;
     lastCall.set(uid, now);
     return next();
   });
 
-  // --- /start help text ---
+  // --- /start ---
   bot.start((ctx) =>
     ctx.reply(
       [
@@ -29,9 +27,8 @@ export function attachHandlers(bot) {
         "   /price btc",
         "   /price eth",
         "",
-        "🔹 Tokens by contract (Dexscreener):",
+        "🔹 Tokens by contract:",
         "   /token <contractAddress>",
-        "   e.g. /token 0xdAC17F958D2ee523a2206206994597C13D831ec7",
         "",
         "🤖 AI assistant:",
         "   /ai <your question>",
@@ -43,15 +40,14 @@ export function attachHandlers(bot) {
     )
   );
 
-  // --- /price <symbolOrId> ---
+  // --- /price ---
   bot.command("price", async (ctx) => {
     const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
     if (!q) return ctx.reply("Usage: /price <symbol or name>\nExample: /price btc");
 
     try {
-      const id = await resolveCoinId(q); // e.g., "btc-bitcoin" for CoinPaprika backend
+      const id = await resolveCoinId(q);
       const { price, change24h } = await getCoinPriceUSD(id);
-
       const ch = change24h != null ? change24h.toFixed(2) : "0.00";
       const arrow = (change24h ?? 0) >= 0 ? "🟢" : "🔴";
 
@@ -63,24 +59,21 @@ export function attachHandlers(bot) {
         ].join("\n")
       );
     } catch (err) {
-      const status = err?.response?.status;
-      if (status === 429) {
+      if (err?.response?.status === 429)
         return ctx.reply("⏳ Hit a rate limit. Please try again in a few seconds.");
-      }
       await ctx.reply(`❌ ${err.message || "Could not fetch price."}`);
     }
   });
 
-  // --- /token <contractAddress> ---
+  // --- /token ---
   bot.command("token", async (ctx) => {
     const contract = ctx.message.text.split(" ").slice(1).join(" ").trim();
-    if (!contract) {
+    if (!contract)
       return ctx.reply("Usage: /token <contractAddress>\nExample: /token 0xdAC17F958D2ee523a2206206994597C13D831ec7");
-    }
 
     try {
       const t = await getTokenByContract(contract);
-      const pc = t.priceChange?.h24 != null ? `${(t.priceChange.h24).toFixed(2)}%` : "n/a";
+      const pc = t.priceChange?.h24 != null ? `${t.priceChange.h24.toFixed(2)}%` : "n/a";
       const liq = t.liquidityUsd ? `$${Math.round(t.liquidityUsd).toLocaleString()}` : "n/a";
       const fdv = t.fdvUsd ? `$${Math.round(t.fdvUsd).toLocaleString()}` : "n/a";
 
@@ -95,63 +88,48 @@ export function attachHandlers(bot) {
         ].filter(Boolean).join("\n")
       );
     } catch (err) {
-      const status = err?.response?.status;
-      if (status === 429) {
+      if (err?.response?.status === 429)
         return ctx.reply("⏳ Hit a rate limit (Dexscreener). Try again in a few seconds.");
-      }
       await ctx.reply(`❌ ${err.message || "Could not fetch token price."}`);
     }
   });
 
-  // --- /ai <question> ---
+  // --- /ai ---
   bot.command("ai", async (ctx) => {
     const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
     if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
 
     try {
       const answer = await askAI(q);
-
-      // 1) Text reply
       await ctx.reply(answer, { disable_web_page_preview: true });
 
-      // 2) Voice reply (via ElevenLabs)
       try {
         const mp3 = await synthesizeToMp3(
-          answer
-            .replace(/https?:\/\/\S+/g, "")       // optional cleanup for TTS
-            .replace(/```[\s\S]*?```/g, "")
-            .trim()
+          answer.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim()
         );
 
         await ctx.replyWithAudio(
           { source: mp3, filename: "reply.mp3" },
-          { title: "DaoMan" }
+          { title: "DaoMan" } // <-- changed title here
         );
       } catch (ttsErr) {
         console.error("TTS failed:", ttsErr?.message || ttsErr);
-        // Uncomment while debugging to see error in chat:
-        // await ctx.reply(`🔇 TTS error: ${ttsErr?.message || "unknown"}`);
       }
     } catch (err) {
-      const status = err?.response?.status;
-      if (status === 429) {
+      if (err?.response?.status === 429)
         return ctx.reply("⏳ AI is rate-limited. Try again shortly.");
-      }
       await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
     }
   });
 
-  // --- /say <text> (TTS smoke test) ---
+  // --- /say (TTS test) ---
   bot.command("say", async (ctx) => {
     const text = ctx.message.text.split(" ").slice(1).join(" ").trim();
     if (!text) return ctx.reply("Usage: /say <text>");
 
     try {
       const mp3 = await synthesizeToMp3(
-        text
-          .replace(/https?:\/\/\S+/g, "")
-          .replace(/```[\s\S]*?```/g, "")
-          .trim()
+        text.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim()
       );
 
       await ctx.replyWithAudio(
@@ -164,7 +142,7 @@ export function attachHandlers(bot) {
     }
   });
 
-  // --- /diag (super detailed env check) ---
+  // --- /diag ---
   bot.command("diag", (ctx) => {
     const mask = (s, show = 4) => (s ? s.slice(0, show) + "…" : "(unset)");
     const len = (s) => (s ? `len=${s.length}` : "len=0");
@@ -181,7 +159,7 @@ export function attachHandlers(bot) {
     return ctx.reply(lines.join("\n"));
   });
 
-  // --- /eleven (direct auth probe to /v1/user) ---
+  // --- /eleven ---
   bot.command("eleven", async (ctx) => {
     try {
       const key = (process.env.ELEVENLABS_API_KEY || "").trim();
@@ -202,19 +180,21 @@ export function attachHandlers(bot) {
     }
   });
 
-  // --- /keypeek (reveal first chars + char codes to catch hidden spaces) ---
+  // --- /keypeek ---
   bot.command("keypeek", (ctx) => {
     const raw = process.env.ELEVENLABS_API_KEY || "";
     const trimmed = raw.trim();
     const preview = trimmed.slice(0, 12);
-    const codes = [...trimmed.slice(0, 8)].map(c => c.charCodeAt(0)).join(",");
-    return ctx.reply([
-      `raw_len=${raw.length}`,
-      `trimmed_len=${trimmed.length}`,
-      `startsWith=${trimmed.slice(0,3)}`,
-      `preview=${preview}`,
-      `first8_charCodes=${codes}`
-    ].join("\n"));
+    const codes = [...trimmed.slice(0, 8)].map((c) => c.charCodeAt(0)).join(",");
+    return ctx.reply(
+      [
+        `raw_len=${raw.length}`,
+        `trimmed_len=${trimmed.length}`,
+        `startsWith=${trimmed.slice(0, 3)}`,
+        `preview=${preview}`,
+        `first8_charCodes=${codes}`
+      ].join("\n")
+    );
   });
 
   // --- /help ---
