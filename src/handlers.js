@@ -2,7 +2,7 @@ import axios from "axios";
 import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
 import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
-import { synthesizeToMp3 } from "./services/tts.js"; // ElevenLabs TTS
+import { synthesizeToMp3 } from "./services/tts.js"; // ElevenLabs TTS (SDK or axios behind the scenes)
 
 export function attachHandlers(bot) {
   // --- simple per-user cooldown (prevents spam/flood) ---
@@ -129,7 +129,7 @@ export function attachHandlers(bot) {
         );
       } catch (ttsErr) {
         console.error("TTS failed:", ttsErr?.message || ttsErr);
-        // For debugging, uncomment to see the error in chat:
+        // Uncomment while debugging to see error in chat:
         // await ctx.reply(`🔇 TTS error: ${ttsErr?.message || "unknown"}`);
       }
     } catch (err) {
@@ -164,27 +164,29 @@ export function attachHandlers(bot) {
     }
   });
 
-  // --- /diag (check critical env) ---
+  // --- /diag (super detailed env check) ---
   bot.command("diag", (ctx) => {
     const mask = (s, show = 4) => (s ? s.slice(0, show) + "…" : "(unset)");
-    const len = (s) => (s ? `len=${s.length}` : "");
-    return ctx.reply(
-      [
-        `BASE_URL: ${process.env.BASE_URL || "(unset)"}`,
-        `TELEGRAM_BOT_TOKEN: ${mask(process.env.TELEGRAM_BOT_TOKEN)} ${len(process.env.TELEGRAM_BOT_TOKEN)}`,
-        `GROQ_API_KEY: ${mask(process.env.GROQ_API_KEY)} ${len(process.env.GROQ_API_KEY)}`,
-        `ELEVENLABS_API_KEY: ${mask(process.env.ELEVENLABS_API_KEY)} ${len(process.env.ELEVENLABS_API_KEY)}`,
-        `ELEVEN_VOICE_ID: ${process.env.ELEVEN_VOICE_ID || "(unset)"} ${len(process.env.ELEVEN_VOICE_ID)}`,
-        `ELEVEN_MODEL_ID: ${process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2"}`
-      ].join("\n")
-    );
+    const len = (s) => (s ? `len=${s.length}` : "len=0");
+    const starts = (s) => (s ? (s.startsWith("sk_") ? "startsWith=sk_" : "startsWith=" + s.slice(0, 3)) : "startsWith=?");
+    const trimInfo = (s) => (s ? (s === s.trim() ? "trim=ok" : "trim=needed") : "trim=?");
+    const lines = [
+      `BASE_URL: ${process.env.BASE_URL || "(unset)"}`,
+      `TELEGRAM_BOT_TOKEN: ${mask(process.env.TELEGRAM_BOT_TOKEN)} ${len(process.env.TELEGRAM_BOT_TOKEN)}`,
+      `GROQ_API_KEY: ${mask(process.env.GROQ_API_KEY)} ${len(process.env.GROQ_API_KEY)}`,
+      `ELEVENLABS_API_KEY: ${mask(process.env.ELEVENLABS_API_KEY)} ${len(process.env.ELEVENLABS_API_KEY)} ${starts(process.env.ELEVENLABS_API_KEY)} ${trimInfo(process.env.ELEVENLABS_API_KEY)}`,
+      `ELEVEN_VOICE_ID: ${process.env.ELEVEN_VOICE_ID || "(unset)"} ${len(process.env.ELEVEN_VOICE_ID)} ${trimInfo(process.env.ELEVEN_VOICE_ID)}`,
+      `ELEVEN_MODEL_ID: ${process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2"}`
+    ];
+    return ctx.reply(lines.join("\n"));
   });
 
-  // --- /eleven (direct auth check) ---
+  // --- /eleven (direct auth probe to /v1/user) ---
   bot.command("eleven", async (ctx) => {
     try {
+      const key = (process.env.ELEVENLABS_API_KEY || "").trim();
       const r = await axios.get("https://api.elevenlabs.io/v1/user", {
-        headers: { "xi-api-key": (process.env.ELEVENLABS_API_KEY || "").trim(), accept: "application/json" },
+        headers: { "xi-api-key": key, accept: "application/json" },
         timeout: 12000
       });
       return ctx.reply(`✅ ElevenLabs auth OK (status ${r.status}).`);
@@ -198,6 +200,21 @@ export function attachHandlers(bot) {
       } catch {}
       return ctx.reply(`🔴 ElevenLabs auth FAILED (status ${st || "?"}) ${body || err.message}`);
     }
+  });
+
+  // --- /keypeek (reveal first chars + char codes to catch hidden spaces) ---
+  bot.command("keypeek", (ctx) => {
+    const raw = process.env.ELEVENLABS_API_KEY || "";
+    const trimmed = raw.trim();
+    const preview = trimmed.slice(0, 12);
+    const codes = [...trimmed.slice(0, 8)].map(c => c.charCodeAt(0)).join(",");
+    return ctx.reply([
+      `raw_len=${raw.length}`,
+      `trimmed_len=${trimmed.length}`,
+      `startsWith=${trimmed.slice(0,3)}`,
+      `preview=${preview}`,
+      `first8_charCodes=${codes}`
+    ].join("\n"));
   });
 
   // --- /help ---
