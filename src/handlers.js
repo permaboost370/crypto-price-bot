@@ -99,21 +99,36 @@ export function attachHandlers(bot) {
     const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
     if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
 
+    // Build Telegram display name: first + last (fallback to username if both missing)
+    const displayName =
+      [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(" ") ||
+      ctx.from?.username ||
+      "friend";
+    const waka = `Waka Waka ${displayName}! `;
+
     try {
       const answer = await askAI(q);
-      await ctx.reply(answer, { disable_web_page_preview: true });
 
+      // 1) Text reply (prefixed)
+      await ctx.reply(waka + answer, { disable_web_page_preview: true });
+
+      // 2) Voice reply (prefixed)
       try {
-        const mp3 = await synthesizeToMp3(
-          answer.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim()
-        );
+        const ttsInput = (waka + answer)
+          .replace(/https?:\/\/\S+/g, "")       // keep TTS clean
+          .replace(/```[\s\S]*?```/g, "")
+          .trim();
+
+        const mp3 = await synthesizeToMp3(ttsInput);
 
         await ctx.replyWithAudio(
           { source: mp3, filename: "reply.mp3" },
-          { title: "DaoMan" } // <<<<<< all /ai voice replies are labeled DaoMan
+          { title: "DaoMan" }
         );
       } catch (ttsErr) {
         console.error("TTS failed:", ttsErr?.message || ttsErr);
+        // Uncomment to surface TTS errors in chat
+        // await ctx.reply(`🔇 TTS error: ${ttsErr?.message || "unknown"}`);
       }
     } catch (err) {
       if (err?.response?.status === 429)
@@ -134,7 +149,7 @@ export function attachHandlers(bot) {
 
       await ctx.replyWithAudio(
         { source: mp3, filename: "say.mp3" },
-        { title: "DaoMan" } // <<<<<< changed from "TTS test" to DaoMan
+        { title: "DaoMan" }
       );
     } catch (err) {
       console.error("TTS /say failed:", err?.message || err);
