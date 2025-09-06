@@ -1,7 +1,8 @@
+import axios from "axios";
 import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
 import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
-import { synthesizeToMp3 } from "./services/tts.js"; // <-- ElevenLabs TTS
+import { synthesizeToMp3 } from "./services/tts.js"; // ElevenLabs TTS
 
 export function attachHandlers(bot) {
   // --- simple per-user cooldown (prevents spam/flood) ---
@@ -128,7 +129,7 @@ export function attachHandlers(bot) {
         );
       } catch (ttsErr) {
         console.error("TTS failed:", ttsErr?.message || ttsErr);
-        // To surface error in chat while testing, uncomment:
+        // For debugging, uncomment to see the error in chat:
         // await ctx.reply(`🔇 TTS error: ${ttsErr?.message || "unknown"}`);
       }
     } catch (err) {
@@ -166,15 +167,37 @@ export function attachHandlers(bot) {
   // --- /diag (check critical env) ---
   bot.command("diag", (ctx) => {
     const mask = (s, show = 4) => (s ? s.slice(0, show) + "…" : "(unset)");
-    const lines = [
-      `BASE_URL: ${process.env.BASE_URL || "(unset)"}`,
-      `TELEGRAM_BOT_TOKEN: ${mask(process.env.TELEGRAM_BOT_TOKEN)}`,
-      `GROQ_API_KEY: ${mask(process.env.GROQ_API_KEY)}`,
-      `ELEVENLABS_API_KEY: ${mask(process.env.ELEVENLABS_API_KEY)}`,
-      `ELEVEN_VOICE_ID: ${process.env.ELEVEN_VOICE_ID || "(unset)"}`,
-      `ELEVEN_MODEL_ID: ${process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2"}`
-    ];
-    return ctx.reply(lines.join("\n"));
+    const len = (s) => (s ? `len=${s.length}` : "");
+    return ctx.reply(
+      [
+        `BASE_URL: ${process.env.BASE_URL || "(unset)"}`,
+        `TELEGRAM_BOT_TOKEN: ${mask(process.env.TELEGRAM_BOT_TOKEN)} ${len(process.env.TELEGRAM_BOT_TOKEN)}`,
+        `GROQ_API_KEY: ${mask(process.env.GROQ_API_KEY)} ${len(process.env.GROQ_API_KEY)}`,
+        `ELEVENLABS_API_KEY: ${mask(process.env.ELEVENLABS_API_KEY)} ${len(process.env.ELEVENLABS_API_KEY)}`,
+        `ELEVEN_VOICE_ID: ${process.env.ELEVEN_VOICE_ID || "(unset)"} ${len(process.env.ELEVEN_VOICE_ID)}`,
+        `ELEVEN_MODEL_ID: ${process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2"}`
+      ].join("\n")
+    );
+  });
+
+  // --- /eleven (direct auth check) ---
+  bot.command("eleven", async (ctx) => {
+    try {
+      const r = await axios.get("https://api.elevenlabs.io/v1/user", {
+        headers: { "xi-api-key": (process.env.ELEVENLABS_API_KEY || "").trim(), accept: "application/json" },
+        timeout: 12000
+      });
+      return ctx.reply(`✅ ElevenLabs auth OK (status ${r.status}).`);
+    } catch (err) {
+      const st = err?.response?.status;
+      let body = "";
+      try {
+        body = err?.response?.data
+          ? (Buffer.isBuffer(err.response.data) ? err.response.data.toString() : JSON.stringify(err.response.data))
+          : "";
+      } catch {}
+      return ctx.reply(`🔴 ElevenLabs auth FAILED (status ${st || "?"}) ${body || err.message}`);
+    }
   });
 
   // --- /help ---
