@@ -125,7 +125,7 @@ export function attachHandlers(bot) {
 
         await ctx.replyWithAudio(
           { source: mp3, filename: "reply.mp3" },
-          { title: "AI reply" }
+          { title: "DaoMan" }
         );
       } catch (ttsErr) {
         console.error("TTS failed:", ttsErr?.message || ttsErr);
