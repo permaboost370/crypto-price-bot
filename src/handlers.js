@@ -110,7 +110,7 @@ export function attachHandlers(bot) {
 
         await ctx.replyWithAudio(
           { source: mp3, filename: "reply.mp3" },
-          { title: "DaoMan" } // <-- changed title here
+          { title: "DaoMan" } // <<<<<< all /ai voice replies are labeled DaoMan
         );
       } catch (ttsErr) {
         console.error("TTS failed:", ttsErr?.message || ttsErr);
@@ -122,7 +122,7 @@ export function attachHandlers(bot) {
     }
   });
 
-  // --- /say (TTS test) ---
+  // --- /say ---
   bot.command("say", async (ctx) => {
     const text = ctx.message.text.split(" ").slice(1).join(" ").trim();
     if (!text) return ctx.reply("Usage: /say <text>");
@@ -134,7 +134,7 @@ export function attachHandlers(bot) {
 
       await ctx.replyWithAudio(
         { source: mp3, filename: "say.mp3" },
-        { title: "TTS test" }
+        { title: "DaoMan" } // <<<<<< changed from "TTS test" to DaoMan
       );
     } catch (err) {
       console.error("TTS /say failed:", err?.message || err);
