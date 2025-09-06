@@ -1,25 +1,21 @@
 // src/services/tts.js
-import gTTSFactory from "node-gtts";
+import axios from "axios";
 
-/**
- * Synthesize text to MP3 Buffer using Google TTS (node-gtts).
- * VOICE_LANG (e.g., 'en', 'el', 'es', 'fr', 'de', 'it', 'pt', 'hi', 'ja', 'ko', 'zh')
- */
-export async function synthesizeToMp3(text, lang = process.env.VOICE_LANG || "en") {
-  const gtts = gTTSFactory(lang);
-
-  const safe = String(text || "").trim();
-  if (!safe) throw new Error("Nothing to speak.");
-
-  return new Promise((resolve, reject) => {
-    try {
-      const stream = gtts.stream(safe);
-      const chunks = [];
-      stream.on("data", (c) => chunks.push(Buffer.from(c)));
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-      stream.on("error", reject);
-    } catch (err) {
-      reject(err);
+export async function synthesizeToMp3(text, voiceId = process.env.ELEVEN_VOICE_ID) {
+  const resp = await axios.post(
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    {
+      text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: { stability: 0.5, similarity_boost: 0.0 }
+    },
+    {
+      headers: {
+        "xi-api-key": process.env.ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+      },
+      responseType: "arraybuffer"
     }
-  });
+  );
+  return Buffer.from(resp.data);
 }
