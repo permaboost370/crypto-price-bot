@@ -13,9 +13,10 @@ import axios from "axios";
 export async function synthesizeToMp3(text, voiceId) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   const defaultVoice = process.env.ELEVEN_VOICE_ID;
-  const useVoice = (voiceId || defaultVoice || "").trim();
+  const model = process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2";
 
   if (!apiKey) throw new Error("Missing ELEVENLABS_API_KEY");
+  const useVoice = (voiceId || defaultVoice || "").trim();
   if (!useVoice) throw new Error("Missing ELEVEN_VOICE_ID (no voice selected)");
 
   const safe = String(text || "").trim();
@@ -23,23 +24,38 @@ export async function synthesizeToMp3(text, voiceId) {
 
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(useVoice)}`;
 
-  const payload = {
-    text: safe,
-    model_id: process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2",
-    voice_settings: {
-      stability: Number(process.env.ELEVEN_STABILITY ?? 0.5),
-      similarity_boost: Number(process.env.ELEVEN_SIMILARITY ?? 0.5)
-    }
-  };
+  try {
+    const resp = await axios.post(
+      url,
+      {
+        text: safe,
+        model_id: model,
+        voice_settings: {
+          stability: Number(process.env.ELEVEN_STABILITY ?? 0.5),        // 0..1
+          similarity_boost: Number(process.env.ELEVEN_SIMILARITY ?? 0.5) // 0..1
+        }
+      },
+      {
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          "accept": "audio/mpeg"
+        },
+        responseType: "arraybuffer",
+        timeout: 30000
+      }
+    );
 
-  const resp = await axios.post(url, payload, {
-    headers: {
-      "xi-api-key": apiKey,
-      "Content-Type": "application/json"
-    },
-    responseType: "arraybuffer",
-    timeout: 30000
-  });
-
-  return Buffer.from(resp.data);
+    return Buffer.from(resp.data);
+  } catch (err) {
+    // Make errors crystal clear
+    const status = err?.response?.status;
+    const dataText = err?.response?.data
+      ? Buffer.isBuffer(err.response.data) ? err.response.data.toString() : String(err.response.data)
+      : "";
+    if (status === 401) throw new Error("ElevenLabs auth failed (401). Check ELEVENLABS_API_KEY.");
+    if (status === 404) throw new Error("Voice not found (404). Check ELEVEN_VOICE_ID.");
+    if (status === 429) throw new Error("ElevenLabs rate-limited (429). Try again shortly.");
+    throw new Error(`ElevenLabs error ${status || ""}: ${dataText || err.message}`);
+  }
 }
