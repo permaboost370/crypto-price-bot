@@ -1,8 +1,7 @@
 import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js"; // now powered by CoinPaprika in your setup
 import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
-import { synthesizeToMp3 } from "./services/tts.js";   // <-- ADD THIS
-
+import { synthesizeToMp3 } from "./services/tts.js";
 
 export function attachHandlers(bot) {
   // --- simple per-user cooldown (prevents spam/flood) ---
@@ -104,44 +103,21 @@ export function attachHandlers(bot) {
   });
 
   // --- /ai <question> ---
-bot.command("ai", async (ctx) => {
-  const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
-  if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
+  bot.command("ai", async (ctx) => {
+    const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
+    if (!q) return ctx.reply("Usage: /ai <your question or prompt>");
 
-  try {
-    const answer = await askAI(q);
-
-    // 1) Text reply (existing behavior)
-    await ctx.reply(answer, { disable_web_page_preview: true });
-
-    // 2) Voice reply (MP3 via node-gtts)
     try {
-      const mp3 = await synthesizeToMp3(
-        answer
-          .replace(/https?:\/\/\S+/g, "")       // optional cleanup for TTS
-          .replace(/```[\s\S]*?```/g, "")
-          .trim(),
-        process.env.VOICE_LANG || "en"
-      );
-
-      await ctx.replyWithAudio(
-        { source: mp3, filename: "reply.mp3" },
-        { title: "AI reply" }
-      );
-    } catch (ttsErr) {
-      console.error("TTS failed:", ttsErr?.message || ttsErr);
-      // Silent fail: keep the text message only
+      const answer = await askAI(q);
+      await ctx.reply(answer, { disable_web_page_preview: true });
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) {
+        return ctx.reply("⏳ AI is rate-limited. Try again shortly.");
+      }
+      await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
     }
-  } catch (err) {
-    const status = err?.response?.status;
-    if (status === 429) {
-      return ctx.reply("⏳ AI is rate-limited. Try again shortly.");
-    }
-    await ctx.reply(`❌ AI error: ${err.message || "Something went wrong."}`);
-  }
-});
-
-
+  });
 
   // --- /help ---
   bot.hears(/^\/help/i, (ctx) =>
