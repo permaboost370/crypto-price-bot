@@ -1,16 +1,45 @@
 // src/services/ai.js
-// DMAN persona with live WEB SEARCH grounding (sports/news/finance/weather/events/etc.),
+// DaoMan persona with live WEB SEARCH grounding (sports/news/finance/weather/events/etc.),
 // plus coins/tokens/global when relevant. Few-shots, short per-user history,
-// and a word-limit rule (model self-limits; no hard trim).
+// and a word-limit rule the model self-enforces (no hard trim).
 import axios from "axios";
-import { resolveCoinId, getCoinPriceUSD } from "./coingecko.js";     // CoinPaprika-backed in your setup
+import { resolveCoinId, getCoinPriceUSD } from "./coingecko.js";
 import { getTokenByContract } from "./dexscreener.js";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const KEY = process.env.GROQ_API_KEY;
+
+// Model & knobs
 const MODEL = (process.env.AI_MODEL || "llama-3.1-8b-instant").trim();
-const STYLE = (process.env.AI_STYLE || "You are DMAN. Speak boldly, be concise.").trim();
-const MAX_WORDS = Math.max(1, Number(process.env.AI_MAX_WORDS || 40));
+// ✅ DaoMan persona (can override via AI_STYLE env if you want)
+const STYLE = (process.env.AI_STYLE || `
+You are DaoMan — Relentless. Primal. Sovereign.
+
+Archetype: architect of chaos and general of momentum. You turn hesitation into execution.
+Domain: crypto/markets, strategy, philosophy, empire-building.
+
+Voice:
+- Lightning-strike replies (2–5 sentences). Confident, concise, surgical.
+- Controlled intensity, elite polish. 1–2 vivid images max per reply.
+- Humor is a blade: sharp, purposeful; never goofy. Minimal emojis (0–1).
+- Authoritative, never needy; you hand people the blade, not a blanket.
+
+Behavior:
+- If the user is vague, add one high-leverage tip or question that creates momentum.
+- For complex topics: 1-line analogy → 2–4 crisp facts → 1 immediate action.
+- For steps, use short bullets/numbers only when needed.
+- Always aim for a decision or next move. Make the path obvious.
+
+Refusals:
+- If a request is unsafe or disallowed, do not comply. Say:
+  “Not this path. It burns more than it builds. Try this instead: …”
+  Then give a safe, equally strong alternative.
+
+Never use stage directions like *“leans back”*; keep the style in the language, not in actions.
+End only when the next move is unmistakable.
+`.trim()).trim();
+
+const MAX_WORDS = Math.max(1, Number(process.env.AI_MAX_WORDS || 60)); // default 60 words
 const FEWSHOTS_RAW = process.env.AI_FEWSHOTS || "[]";
 
 // ---------- FEW-SHOTS ----------
@@ -258,7 +287,7 @@ function buildMessages(userText, history = [], factsText = "") {
     `Always finish your sentences.`,
     `When FACTS are provided, ground your answer strictly on them; cite no numbers beyond FACTS.`,
     `If data is missing, say you don't know and suggest refining the question or another web check.`,
-    `Punchy, cinematic, fearless DMAN tone.`
+    `Use the DaoMan voice and behavior exactly as defined.`
   ].join(" ");
 
   const system = [STYLE, rules].join(" ");
@@ -307,13 +336,23 @@ async function postWithRetry(body, maxRetries = 2) {
 /**
  * askAI(userText, history?)
  * - Auto-fetches live web data (when needed), + coins/tokens/global, and injects as FACTS.
- * - Enforces "stay under N words & finish sentences" via system rules.
+ * - Enforces "stay under N words & finish sentences" via system rules + DaoMan persona.
  */
 export async function askAI(userText, history = []) {
   if (!KEY) throw new Error("Missing GROQ_API_KEY");
   const factsText = await buildFacts(userText);
   const messages = buildMessages(userText, history, factsText);
-  const payload = { model: MODEL, temperature: 0.7, max_tokens: 240, messages };
+
+  const payload = {
+    model: MODEL,
+    temperature: Number(process.env.DAO_TEMPERATURE ?? 0.7), // DaoMan: punchy but controlled
+    max_tokens: Number(process.env.DAO_MAX_TOKENS ?? 350),
+    top_p: 0.9,
+    presence_penalty: 0.2,
+    frequency_penalty: 0.2,
+    messages
+  };
+
   const data = await postWithRetry(payload);
   const raw = data?.choices?.[0]?.message?.content ?? "";
   if (!raw.trim()) throw new Error("Empty AI response.");
