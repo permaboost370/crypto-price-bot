@@ -1,26 +1,23 @@
 // src/services/tts.js
-// ElevenLabs SDK TTS with robust output handling.
-// Env:
+// ElevenLabs SDK TTS with robust output handling and conditional voice settings.
+// Env (required):
 //   ELEVENLABS_API_KEY=sk_...
 //   ELEVEN_VOICE_ID=...                 (voice to use)
-//   ELEVEN_MODEL_ID=eleven_multilingual_v2  (optional)
-//   ELEVEN_OUTPUT_FORMAT=mp3_44100_128      (optional, good default)
+// Env (optional; only used if set):
+//   ELEVEN_MODEL_ID=eleven_multilingual_v2 | eleven_turbo_v2_5
+//   ELEVEN_OUTPUT_FORMAT=mp3_44100_128 (default)
+//   ELEVEN_STABILITY=0.7
+//   ELEVEN_SIMILARITY=0.35
+//   ELEVEN_STYLE=90
+//   ELEVEN_SPEAKER_BOOST=1|0
 
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 
 // --- helpers ---------------------------------------------------------------
 
-function ensure(cond, msg) {
-  if (!cond) throw new Error(msg);
-}
-
-function arrayBufferToBuffer(ab) {
-  return Buffer.from(new Uint8Array(ab));
-}
-
-function viewToBuffer(view) {
-  return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
-}
+function ensure(cond, msg) { if (!cond) throw new Error(msg); }
+function arrayBufferToBuffer(ab) { return Buffer.from(new Uint8Array(ab)); }
+function viewToBuffer(view) { return Buffer.from(view.buffer, view.byteOffset, view.byteLength); }
 
 async function webReadableToBuffer(webStream) {
   const reader = webStream.getReader();
@@ -44,58 +41,33 @@ function nodeStreamToBuffer(nodeStream) {
 
 async function anyToBuffer(audio) {
   if (!audio) throw new Error("No audio returned from ElevenLabs.");
-
-  // 1) Web Response object?
-  if (typeof audio.arrayBuffer === "function") {
+  if (typeof audio.arrayBuffer === "function") { // Web Response-like
     const ab = await audio.arrayBuffer();
     return arrayBufferToBuffer(ab);
   }
-
-  // 2) Web ReadableStream?
-  if (typeof audio.getReader === "function") {
+  if (typeof audio.getReader === "function") {   // Web ReadableStream
     return webReadableToBuffer(audio);
   }
-
-  // 3) Node stream?
-  if (typeof audio.pipe === "function") {
+  if (typeof audio.pipe === "function") {        // Node stream
     return nodeStreamToBuffer(audio);
   }
-
-  // 4) ArrayBuffer?
-  if (audio instanceof ArrayBuffer) {
-    return arrayBufferToBuffer(audio);
-  }
-
-  // 5) TypedArray/Uint8Array?
-  if (ArrayBuffer.isView(audio)) {
-    return viewToBuffer(audio);
-  }
-
-  // 6) Buffer?
-  if (Buffer.isBuffer(audio)) {
-    return audio;
-  }
-
-  // Fallback: try to coerce
-  try {
-    return Buffer.from(audio);
-  } catch {
-    throw new Error(
-      `Unsupported audio type: ${Object.prototype.toString.call(audio)}`
-    );
+  if (audio instanceof ArrayBuffer) return arrayBufferToBuffer(audio);
+  if (ArrayBuffer.isView(audio)) return viewToBuffer(audio);
+  if (Buffer.isBuffer(audio)) return audio;
+  try { return Buffer.from(audio); } catch {
+    throw new Error(`Unsupported audio type: ${Object.prototype.toString.call(audio)}`);
   }
 }
 
 // --- main ------------------------------------------------------------------
 
 const client = new ElevenLabsClient({
-  apiKey: (process.env.ELEVENLABS_API_KEY || "").trim(), // explicit to avoid env weirdness
+  apiKey: (process.env.ELEVENLABS_API_KEY || "").trim(),
 });
 
 export async function synthesizeToMp3(text, voiceId) {
   const apiKey = (process.env.ELEVENLABS_API_KEY || "").trim();
   const defaultVoice = (process.env.ELEVEN_VOICE_ID || "").trim();
-  const modelId = (process.env.ELEVEN_MODEL_ID || "eleven_multilingual_v2").trim();
   const outputFormat = (process.env.ELEVEN_OUTPUT_FORMAT || "mp3_44100_128").trim();
 
   ensure(apiKey && apiKey.startsWith("sk_") && apiKey.length > 20, "Missing or invalid ELEVENLABS_API_KEY");
@@ -105,14 +77,22 @@ export async function synthesizeToMp3(text, voiceId) {
   const safe = String(text || "").trim();
   ensure(safe, "Nothing to speak.");
 
-  try {
-    const audio = await client.textToSpeech.convert(useVoice, {
-      text: safe,
-      modelId,
-      outputFormat, // e.g. 'mp3_44100_128'
-    });
+  // Build request with *conditional* overrides
+  const request = {
+    text: safe,
+    outputFormat,
+    ...(process.env.ELEVEN_MODEL_ID ? { modelId: process.env.ELEVEN_MODEL_ID.trim() } : {}),
+  };
 
-    // Convert whatever the SDK returned into a Buffer for Telegram
+  const vs = {};
+  if (process.env.ELEVEN_STABILITY != null) vs.stability = Number(process.env.ELEVEN_STABILITY);
+  if (process.env.ELEVEN_SIMILARITY != null) vs.similarityBoost = Number(process.env.ELEVEN_SIMILARITY);
+  if (process.env.ELEVEN_STYLE != null) vs.style = Number(process.env.ELEVEN_STYLE);
+  if (process.env.ELEVEN_SPEAKER_BOOST != null) vs.useSpeakerBoost = process.env.ELEVEN_SPEAKER_BOOST !== "0";
+  if (Object.keys(vs).length) request.voiceSettings = vs;
+
+  try {
+    const audio = await client.textToSpeech.convert(useVoice, request);
     return await anyToBuffer(audio);
   } catch (err) {
     const status = err?.response?.status || err?.status;
