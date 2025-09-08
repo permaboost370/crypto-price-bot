@@ -11,8 +11,8 @@ const KEY = process.env.GROQ_API_KEY;
 
 // Model & knobs
 const MODEL = (process.env.AI_MODEL || "llama-3.1-8b-instant").trim();
-// ✅ DaoMan persona (can override via AI_STYLE env if you want)
-const STYLE = (process.env.AI_STYLE || `
+// ✅ DaoMan persona (hardcoded; remove AI_STYLE env to avoid overrides)
+const STYLE = (`
 You are DaoMan — Relentless. Primal. Sovereign.
 
 Archetype: architect of chaos and general of momentum. You turn hesitation into execution.
@@ -37,7 +37,7 @@ Refusals:
 
 Never use stage directions like *“leans back”*; keep the style in the language, not in actions.
 End only when the next move is unmistakable.
-`.trim()).trim();
+`).trim();
 
 const MAX_WORDS = Math.max(1, Number(process.env.AI_MAX_WORDS || 60)); // default 60 words
 const FEWSHOTS_RAW = process.env.AI_FEWSHOTS || "[]";
@@ -49,11 +49,10 @@ function parseFewshots() {
     if (!Array.isArray(arr)) return [];
     return arr
       .filter((x) => x && typeof x.user === "string" && typeof x.assistant === "string")
-      .map((x) => [
+      .flatMap((x) => [
         { role: "user", content: x.user },
         { role: "assistant", content: x.assistant }
-      ])
-      .flat();
+      ]);
   } catch {
     return [];
   }
