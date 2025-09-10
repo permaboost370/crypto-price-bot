@@ -40,14 +40,16 @@ export function attachHandlers(bot) {
     const waka = `Waka Waka ${tgDisplayName(ctx)}! `;
     const textOut = waka + answer;
 
-    // text
+    // 1) text reply
     await ctx.reply(textOut, { disable_web_page_preview: true });
 
-    // voice
+    // 2) voice reply — ALWAYS TTS for consistency
     try {
-      const mp3 = await synthesizeToMp3(
-        textOut.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim()
-      );
+      const cleaned = textOut
+        .replace(/https?:\/\/\S+/g, "")
+        .replace(/```[\s\S]*?```/g, "")
+        .trim();
+      const mp3 = await synthesizeToMp3(cleaned);
       await ctx.replyWithAudio({ source: mp3, filename: "reply.mp3" }, { title });
     } catch (e) {
       console.error("TTS failed:", e?.message || e);
@@ -60,7 +62,7 @@ export function attachHandlers(bot) {
     ctx.reply(
       [
         "DAOman online.",
-        "Use /price <symbol>, /token <contract>, /ai <question>, or send a voice note — I reply with text and voice."
+        "Use /price <symbol>, /token <contract>, /ai <question>, or send a voice note — I reply with text and voice (one consistent voice)."
       ].join("\n")
     )
   );
@@ -95,7 +97,9 @@ export function attachHandlers(bot) {
   bot.command("token", async (ctx) => {
     const contract = ctx.message.text.split(" ").slice(1).join(" ").trim();
     if (!contract) {
-      return ctx.reply("Usage: /token <contractAddress>\nExample: /token 0xdAC17F958D2ee523a2206206994597C13D831ec7");
+      return ctx.reply(
+        "Usage: /token <contractAddress>\nExample: /token 0xdAC17F958D2ee523a2206206994597C13D831ec7"
+      );
     }
 
     try {
@@ -112,7 +116,9 @@ export function attachHandlers(bot) {
           `24h: ${pc}`,
           `Liquidity: ${liq} • FDV: ${fdv}`,
           t.pairUrl ? `Chart: ${t.pairUrl}` : ""
-        ].filter(Boolean).join("\n")
+        ]
+          .filter(Boolean)
+          .join("\n")
       );
     } catch (err) {
       const status = err?.response?.status;
@@ -121,11 +127,11 @@ export function attachHandlers(bot) {
     }
   });
 
-  // ---------- /ai (supports text OR reply-to voice/audio) ----------
+  // ---------- /ai (text OR reply-to voice/audio) ----------
   bot.command("ai", async (ctx) => {
     let q = ctx.message.text.split(" ").slice(1).join(" ").trim();
 
-    // If no text and /ai is replying to a voice/audio, transcribe it
+    // If no text and /ai is replying to a voice/audio, transcribe it first
     if (!q && ctx.message.reply_to_message) {
       const rep = ctx.message.reply_to_message;
       try {
@@ -154,14 +160,14 @@ export function attachHandlers(bot) {
 
     try {
       const answer = await askAI(q);
-      await replyTextAndVoice(ctx, answer, "DaoMan");
+      await replyTextAndVoice(ctx, answer, "DaoMan"); // ALWAYS TTS
     } catch (err) {
       if (err?.response?.status === 429) return ctx.reply("AI is rate-limited. Try again shortly.");
       await ctx.reply(`AI error: ${err.message || "Something went wrong."}`);
     }
   });
 
-  // ---------- Voice note → STT → AI → text + voice ----------
+  // ---------- Voice note → STT → AI → text + voice (TTS only) ----------
   bot.on("voice", async (ctx) => {
     try {
       if (!process.env.OPENAI_API_KEY) return ctx.reply("Missing OPENAI_API_KEY for transcription.");
@@ -169,22 +175,26 @@ export function attachHandlers(bot) {
       const { buffer, filename } = await getTelegramFileBuffer(ctx, fileId, "voice.ogg");
       const userText = await transcribeBuffer(buffer, { filename });
       const answer = await askAI(userText);
-      await replyTextAndVoice(ctx, answer, "DaoMan");
+      await replyTextAndVoice(ctx, answer, "DaoMan"); // ALWAYS TTS
     } catch (err) {
       console.error("voice handler failed:", err);
       await ctx.reply(`Voice processing failed: ${err?.message || "unknown error"}`);
     }
   });
 
-  // ---------- Audio file → STT → AI → text + voice ----------
+  // ---------- Audio file → STT → AI → text + voice (TTS only) ----------
   bot.on("audio", async (ctx) => {
     try {
       if (!process.env.OPENAI_API_KEY) return ctx.reply("Missing OPENAI_API_KEY for transcription.");
       const fileId = ctx.message.audio.file_id;
-      const { buffer, filename } = await getTelegramFileBuffer(ctx, fileId, ctx.message.audio.file_name || "audio.mp3");
+      const { buffer, filename } = await getTelegramFileBuffer(
+        ctx,
+        fileId,
+        ctx.message.audio.file_name || "audio.mp3"
+      );
       const userText = await transcribeBuffer(buffer, { filename });
       const answer = await askAI(userText);
-      await replyTextAndVoice(ctx, answer, "DaoMan");
+      await replyTextAndVoice(ctx, answer, "DaoMan"); // ALWAYS TTS
     } catch (err) {
       console.error("audio handler failed:", err);
       await ctx.reply(`Audio processing failed: ${err?.message || "unknown error"}`);
@@ -197,7 +207,7 @@ export function attachHandlers(bot) {
     if (!text) return ctx.reply("Usage: /say <text>");
     try {
       const cleaned = text.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim();
-      const mp3 = await synthesizeToMp3(cleaned);
+      const mp3 = await synthesizeToMp3(cleaned); // ALWAYS TTS
       await ctx.replyWithAudio({ source: mp3, filename: "say.mp3" }, { title: "DaoMan" });
     } catch (err) {
       console.error("TTS /say failed:", err?.message || err);
@@ -207,6 +217,8 @@ export function attachHandlers(bot) {
 
   // ---------- /help ----------
   bot.hears(/^\/help/i, (ctx) =>
-    ctx.reply("Commands: /price <symbol>, /token <contractAddress>, /ai <question>. Send a voice note for voice replies.")
+    ctx.reply(
+      "Commands: /price <symbol>, /token <contractAddress>, /ai <question>. Send a voice note for automatic text + voice replies."
+    )
   );
 }
