@@ -1,20 +1,18 @@
 // src/services/tts.js
-// ElevenLabs SDK TTS with robust output handling and conditional voice settings.
-// Env (required):
+// ElevenLabs TTS + Voice-to-Voice (V2V) helpers.
+// Requires:
 //   ELEVENLABS_API_KEY=sk_...
-//   ELEVEN_VOICE_ID=...                 (voice to use)
-// Env (optional; only used if set):
+//   ELEVEN_VOICE_ID=...               (your saved/created voice)
+// Optional:
 //   ELEVEN_MODEL_ID=eleven_multilingual_v2 | eleven_turbo_v2_5
-//   ELEVEN_OUTPUT_FORMAT=mp3_44100_128 (default)
-//   ELEVEN_STABILITY=0.7
-//   ELEVEN_SIMILARITY=0.35
-//   ELEVEN_STYLE=90
-//   ELEVEN_SPEAKER_BOOST=1|0
+//   ELEVEN_OUTPUT_FORMAT=mp3_44100_128
+//   ELEVEN_STABILITY, ELEVEN_SIMILARITY, ELEVEN_STYLE, ELEVEN_SPEAKER_BOOST
 
+import fs from "fs";
+import path from "path";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 
-// --- helpers ---------------------------------------------------------------
-
+// ----------------- small utils -----------------
 function ensure(cond, msg) { if (!cond) throw new Error(msg); }
 function arrayBufferToBuffer(ab) { return Buffer.from(new Uint8Array(ab)); }
 function viewToBuffer(view) { return Buffer.from(view.buffer, view.byteOffset, view.byteLength); }
@@ -41,14 +39,14 @@ function nodeStreamToBuffer(nodeStream) {
 
 async function anyToBuffer(audio) {
   if (!audio) throw new Error("No audio returned from ElevenLabs.");
-  if (typeof audio.arrayBuffer === "function") { // Web Response-like
+  if (typeof audio.arrayBuffer === "function") {
     const ab = await audio.arrayBuffer();
     return arrayBufferToBuffer(ab);
   }
-  if (typeof audio.getReader === "function") {   // Web ReadableStream
+  if (typeof audio.getReader === "function") {
     return webReadableToBuffer(audio);
   }
-  if (typeof audio.pipe === "function") {        // Node stream
+  if (typeof audio.pipe === "function") {
     return nodeStreamToBuffer(audio);
   }
   if (audio instanceof ArrayBuffer) return arrayBufferToBuffer(audio);
@@ -59,25 +57,30 @@ async function anyToBuffer(audio) {
   }
 }
 
-// --- main ------------------------------------------------------------------
+function bufferToTempFile(buf, filename = "reference.ogg") {
+  const p = path.join("/tmp", `${Date.now()}-${filename}`);
+  fs.writeFileSync(p, buf);
+  return p;
+}
 
+// ----------------- ElevenLabs client -----------------
 const client = new ElevenLabsClient({
   apiKey: (process.env.ELEVENLABS_API_KEY || "").trim(),
 });
 
+// ----------------- Public: plain TTS -----------------
 export async function synthesizeToMp3(text, voiceId) {
   const apiKey = (process.env.ELEVENLABS_API_KEY || "").trim();
   const defaultVoice = (process.env.ELEVEN_VOICE_ID || "").trim();
   const outputFormat = (process.env.ELEVEN_OUTPUT_FORMAT || "mp3_44100_128").trim();
+  const useVoice = (voiceId || defaultVoice || "").trim();
 
   ensure(apiKey && apiKey.startsWith("sk_") && apiKey.length > 20, "Missing or invalid ELEVENLABS_API_KEY");
-  const useVoice = (voiceId || defaultVoice || "").trim();
   ensure(useVoice, "Missing ELEVEN_VOICE_ID (no voice selected)");
 
   const safe = String(text || "").trim();
   ensure(safe, "Nothing to speak.");
 
-  // Build request with *conditional* overrides
   const request = {
     text: safe,
     outputFormat,
@@ -102,5 +105,51 @@ export async function synthesizeToMp3(text, voiceId) {
     if (status === 404) throw new Error("Voice not found (404). Check ELEVEN_VOICE_ID.");
     if (status === 429) throw new Error("ElevenLabs rate-limited (429). Try again shortly.");
     throw new Error(`ElevenLabs error ${status || ""}: ${msg}`);
+  }
+}
+
+// ----------------- Public: Voice-to-Voice (V2V) -----------------
+export async function synthesizeWithReference(text, referenceBuffer, referenceFilename = "reference.ogg", voiceId) {
+  const apiKey = (process.env.ELEVENLABS_API_KEY || "").trim();
+  const defaultVoice = (process.env.ELEVEN_VOICE_ID || "").trim();
+  const outputFormat = (process.env.ELEVEN_OUTPUT_FORMAT || "mp3_44100_128").trim();
+  const useVoice = (voiceId || defaultVoice || "").trim();
+
+  ensure(apiKey && apiKey.startsWith("sk_") && apiKey.length > 20, "Missing or invalid ELEVENLABS_API_KEY");
+  ensure(useVoice, "Missing ELEVEN_VOICE_ID (no voice selected)");
+
+  const safe = String(text || "").trim();
+  ensure(safe, "Nothing to speak.");
+  ensure(Buffer.isBuffer(referenceBuffer) && referenceBuffer.length > 0, "Empty reference audio buffer.");
+
+  const tmp = bufferToTempFile(referenceBuffer, referenceFilename);
+
+  const request = {
+    text: safe,
+    outputFormat,
+    ...(process.env.ELEVEN_MODEL_ID ? { modelId: process.env.ELEVEN_MODEL_ID.trim() } : {}),
+    voiceSampleFile: fs.createReadStream(tmp),
+  };
+
+  const vs = {};
+  if (process.env.ELEVEN_STABILITY != null) vs.stability = Number(process.env.ELEVEN_STABILITY);
+  if (process.env.ELEVEN_SIMILARITY != null) vs.similarityBoost = Number(process.env.ELEVEN_SIMILARITY);
+  if (process.env.ELEVEN_STYLE != null) vs.style = Number(process.env.ELEVEN_STYLE);
+  if (process.env.ELEVEN_SPEAKER_BOOST != null) vs.useSpeakerBoost = process.env.ELEVEN_SPEAKER_BOOST !== "0";
+  if (Object.keys(vs).length) request.voiceSettings = vs;
+
+  try {
+    const audio = await client.textToSpeech.convertVoiceToVoice(useVoice, request);
+    return await anyToBuffer(audio);
+  } catch (err) {
+    const status = err?.response?.status || err?.status;
+    const msg = err?.message || "Unknown error";
+    if (status === 401) throw new Error("ElevenLabs auth failed (401). Check ELEVENLABS_API_KEY.");
+    if (status === 403) throw new Error("ElevenLabs forbidden (403). Check API key permissions.");
+    if (status === 404) throw new Error("Voice not found (404). Check ELEVEN_VOICE_ID.");
+    if (status === 429) throw new Error("ElevenLabs rate-limited (429). Try again shortly.");
+    throw new Error(`ElevenLabs V2V error ${status || ""}: ${msg}`);
+  } finally {
+    fs.promises.unlink(tmp).catch(() => {});
   }
 }
