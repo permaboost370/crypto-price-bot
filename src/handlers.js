@@ -1,22 +1,25 @@
 // src/handlers.js
 import axios from "axios";
+import { resolveCoinId, getCoinPriceUSD } from "./services/coingecko.js";
+import { getTokenByContract } from "./services/dexscreener.js";
 import { askAI } from "./services/ai.js";
 import { synthesizeToMp3 } from "./services/tts.js";
 import { transcribeBuffer } from "./services/stt.js";
 
 export function attachHandlers(bot) {
-  // small anti-spam
+  // --- simple per-user cooldown ---
   const lastCall = new Map();
   bot.use((ctx, next) => {
     const uid = ctx.from?.id;
     if (!uid) return next();
     const now = Date.now();
     const prev = lastCall.get(uid) || 0;
-    if (now - prev < 500) return;
+    if (now - prev < 500) return; // drop very fast repeats
     lastCall.set(uid, now);
     return next();
   });
 
+  // ---------- helpers ----------
   function tgDisplayName(ctx) {
     const name = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(" ");
     return name || ctx.from?.username || "friend";
@@ -37,8 +40,10 @@ export function attachHandlers(bot) {
     const waka = `Waka Waka ${tgDisplayName(ctx)}! `;
     const textOut = waka + answer;
 
+    // text
     await ctx.reply(textOut, { disable_web_page_preview: true });
 
+    // voice
     try {
       const mp3 = await synthesizeToMp3(
         textOut.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim()
@@ -50,20 +55,77 @@ export function attachHandlers(bot) {
     }
   }
 
-  // /start
+  // ---------- /start ----------
   bot.start((ctx) =>
     ctx.reply(
       [
         "DAOman online.",
-        "Use /ai <your question> or send a voice note — I reply with text and voice."
+        "Use /price <symbol>, /token <contract>, /ai <question>, or send a voice note — I reply with text and voice."
       ].join("\n")
     )
   );
 
-  // /ai <text> (also works as reply to a voice/audio to transcribe it first)
+  // ---------- /price <symbolOrId> ----------
+  bot.command("price", async (ctx) => {
+    const q = ctx.message.text.split(" ").slice(1).join(" ").trim();
+    if (!q) return ctx.reply("Usage: /price <symbol or name>\nExample: /price btc");
+
+    try {
+      const id = await resolveCoinId(q); // e.g., "btc-bitcoin"
+      const { price, change24h } = await getCoinPriceUSD(id);
+
+      const ch = change24h != null ? change24h.toFixed(2) : "0.00";
+      const arrow = (change24h ?? 0) >= 0 ? "🟢" : "🔴";
+
+      await ctx.reply(
+        [
+          `Price — ${q.toUpperCase()}`,
+          `USD: $${Number(price).toLocaleString(undefined, { maximumFractionDigits: 10 })}`,
+          `${arrow} 24h: ${ch}%`
+        ].join("\n")
+      );
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) return ctx.reply("Rate limit hit. Try again in a few seconds.");
+      await ctx.reply(`Error: ${err.message || "Could not fetch price."}`);
+    }
+  });
+
+  // ---------- /token <contractAddress> ----------
+  bot.command("token", async (ctx) => {
+    const contract = ctx.message.text.split(" ").slice(1).join(" ").trim();
+    if (!contract) {
+      return ctx.reply("Usage: /token <contractAddress>\nExample: /token 0xdAC17F958D2ee523a2206206994597C13D831ec7");
+    }
+
+    try {
+      const t = await getTokenByContract(contract);
+      const pc = t.priceChange?.h24 != null ? `${t.priceChange.h24.toFixed(2)}%` : "n/a";
+      const liq = t.liquidityUsd ? `$${Math.round(t.liquidityUsd).toLocaleString()}` : "n/a";
+      const fdv = t.fdvUsd ? `$${Math.round(t.fdvUsd).toLocaleString()}` : "n/a";
+
+      await ctx.reply(
+        [
+          `Token: ${t.name || "Unknown"} (${t.symbol || "?"})`,
+          `Chain: ${t.chainId} • DEX: ${t.dex}`,
+          `Price: $${t.priceUsd.toLocaleString(undefined, { maximumFractionDigits: 10 })}`,
+          `24h: ${pc}`,
+          `Liquidity: ${liq} • FDV: ${fdv}`,
+          t.pairUrl ? `Chart: ${t.pairUrl}` : ""
+        ].filter(Boolean).join("\n")
+      );
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 429) return ctx.reply("Dexscreener rate limit. Try again shortly.");
+      await ctx.reply(`Error: ${err.message || "Could not fetch token."}`);
+    }
+  });
+
+  // ---------- /ai (supports text OR reply-to voice/audio) ----------
   bot.command("ai", async (ctx) => {
     let q = ctx.message.text.split(" ").slice(1).join(" ").trim();
 
+    // If no text and /ai is replying to a voice/audio, transcribe it
     if (!q && ctx.message.reply_to_message) {
       const rep = ctx.message.reply_to_message;
       try {
@@ -99,7 +161,7 @@ export function attachHandlers(bot) {
     }
   });
 
-  // Voice note → STT → AI → text + voice
+  // ---------- Voice note → STT → AI → text + voice ----------
   bot.on("voice", async (ctx) => {
     try {
       if (!process.env.OPENAI_API_KEY) return ctx.reply("Missing OPENAI_API_KEY for transcription.");
@@ -114,7 +176,7 @@ export function attachHandlers(bot) {
     }
   });
 
-  // (optional) Audio file → STT → AI → text + voice
+  // ---------- Audio file → STT → AI → text + voice ----------
   bot.on("audio", async (ctx) => {
     try {
       if (!process.env.OPENAI_API_KEY) return ctx.reply("Missing OPENAI_API_KEY for transcription.");
@@ -128,4 +190,23 @@ export function attachHandlers(bot) {
       await ctx.reply(`Audio processing failed: ${err?.message || "unknown error"}`);
     }
   });
+
+  // ---------- /say (manual TTS test) ----------
+  bot.command("say", async (ctx) => {
+    const text = ctx.message.text.split(" ").slice(1).join(" ").trim();
+    if (!text) return ctx.reply("Usage: /say <text>");
+    try {
+      const cleaned = text.replace(/https?:\/\/\S+/g, "").replace(/```[\s\S]*?```/g, "").trim();
+      const mp3 = await synthesizeToMp3(cleaned);
+      await ctx.replyWithAudio({ source: mp3, filename: "say.mp3" }, { title: "DaoMan" });
+    } catch (err) {
+      console.error("TTS /say failed:", err?.message || err);
+      await ctx.reply(`TTS error: ${err?.message || "unknown"}`);
+    }
+  });
+
+  // ---------- /help ----------
+  bot.hears(/^\/help/i, (ctx) =>
+    ctx.reply("Commands: /price <symbol>, /token <contractAddress>, /ai <question>. Send a voice note for voice replies.")
+  );
 }
